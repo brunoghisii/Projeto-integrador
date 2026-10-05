@@ -38,7 +38,7 @@ form.addEventListener('submit', (e) => {
         novaSenha: senha
     };
 
-    const API_URL = 'http://localhost:8080/api/pacientes/redefinir-senha';
+    const API_URL = '/api/pacientes/redefinir-senha';
 
     fetch(API_URL, {
         method: 'POST',

@@ -2,6 +2,9 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 import authRoutes from './routes/auth.js';
 import mfaRoutes from './routes/mfa.js';
@@ -28,6 +31,37 @@ const app = express();
 
 const corsOrigins = process.env['CORS_ORIGIN']?.split(',') ?? ['http://localhost:3000', 'http://localhost:5173'];
 app.use(cors({ origin: corsOrigins, credentials: true }));
+
+// Frontend estatico servido pelo proprio backend (mesma origem que a API).
+// Resolve caminhos sem diferenciar maiusculas/acentos, pois os links do front
+// foram escritos no Windows (ex.: ../login/ -> Login/) e o Linux/Android diferencia.
+const FRONT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../Sistema Web');
+const normalizar = (s: string) => s.normalize('NFC').toLowerCase();
+function resolverCaminho(urlPath: string): string | null {
+  let atual = FRONT_DIR;
+  for (const parte of urlPath.split('/').filter(Boolean)) {
+    if (parte === '..' || parte === '.') return null;
+    if (!fs.existsSync(atual) || !fs.statSync(atual).isDirectory()) return null;
+    const achado = fs.readdirSync(atual).find((n) => normalizar(n) === normalizar(parte));
+    if (!achado) return null;
+    atual = path.join(atual, achado);
+  }
+  if (fs.existsSync(atual) && fs.statSync(atual).isDirectory()) atual = path.join(atual, 'index.html');
+  return fs.existsSync(atual) ? atual : null;
+}
+app.get('/', (_req, res) => res.redirect('/Paciente/Login/'));
+app.use((req, res, next) => {
+  if (req.method !== 'GET' || req.path.startsWith('/api')) return next();
+  let decodificado: string;
+  try { decodificado = decodeURIComponent(req.path); } catch { return next(); }
+  const arquivo = resolverCaminho(decodificado);
+  if (!arquivo) return next();
+  // Garante barra final em pastas para os caminhos relativos (../x) funcionarem
+  if (arquivo.endsWith('index.html') && !decodificado.endsWith('/') && !decodificado.endsWith('.html')) {
+    return res.redirect(req.path + '/');
+  }
+  res.sendFile(arquivo);
+});
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -74,11 +108,15 @@ const PORT = Number(process.env['SERVER_PORT'] ?? 3000);
 app.listen(PORT, async () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/api/health`);
-  await runMigrations();
-  await sincronizarDataset().catch((err) =>
-    console.error('[Copiloto] Falha ao sincronizar dataset de procedimentos:', err instanceof Error ? err.message : err));
-  await limparSlotsExpirados();
-  console.log('Slots expirados removidos da agenda.');
+  try {
+    await runMigrations();
+    await sincronizarDataset().catch((err) =>
+      console.error('[Copiloto] Falha ao sincronizar dataset de procedimentos:', err instanceof Error ? err.message : err));
+    await limparSlotsExpirados();
+    console.log('Slots expirados removidos da agenda.');
+  } catch (err) {
+    console.error('Falha ao inicializar o banco (verifique DATABASE_URL):', (err as Error).message);
+  }
 
   // ─── DESBLOQUEIO AUTOMÁTICO DE MULTI-VAGAS NO POSTGRES ───
   try {

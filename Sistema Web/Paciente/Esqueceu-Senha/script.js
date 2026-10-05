@@ -7,7 +7,7 @@ form.addEventListener('submit', (e) => {
     const dadosRecuperacao = { email: email };
 
     // Rota que seu colega vai criar no Spring Boot (Java)
-    const API_URL = 'http://localhost:8080/api/pacientes/recuperar-senha';
+    const API_URL = '/api/pacientes/recuperar-senha';
 
     fetch(API_URL, {
         method: 'POST',
