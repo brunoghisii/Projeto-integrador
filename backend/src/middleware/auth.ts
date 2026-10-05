@@ -41,7 +41,9 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   }
 
   try {
-    const decoded = jwt.verify(token, jwtConfig.secret) as JwtPayload;
+    const decoded = jwt.verify(token, jwtConfig.secret) as JwtPayload & { tipo?: string };
+    // Tokens de profissional nao tem "tipo"; os de paciente (e de redefinicao de senha) tem.
+    if (decoded.tipo !== undefined) throw new Error('Token nao e de profissional');
     req.profissional = decoded;
     next();
   } catch {

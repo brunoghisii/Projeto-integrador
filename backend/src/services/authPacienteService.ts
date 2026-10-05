@@ -73,3 +73,47 @@ export async function login(email: string, senha: string) {
   const token = generateToken(row.id_paciente as number, row.email as string);
   return { paciente: { id: row.id_paciente, nome: row.nome, email: row.email }, token };
 }
+
+// ─── Recuperação de senha ───────────────────────────────────────
+// O token de redefinição tem tipo próprio (não serve para login) e carrega um pedaço
+// do hash da senha atual: depois que a senha muda, o link deixa de valer (uso único).
+
+const RESET_EXPIRA = '30m';
+
+function marcaSenha(hash: string): string {
+  return hash.slice(-12);
+}
+
+/** Gera o link de redefinição. Retorna null se o e-mail não existir (a rota responde igual nos dois casos). */
+export async function solicitarRedefinicaoSenha(email: string) {
+  if (!email || !isValidEmail(email)) throw new Error('Email invalido');
+  const r = await pool.query('SELECT id_paciente, nome, email, senha FROM paciente WHERE email = $1', [email.trim()]);
+  const row = r.rows[0];
+  if (!row) return null;
+  const token = jwt.sign(
+    { id: row.id_paciente, tipo: 'reset-paciente', v: marcaSenha(row.senha as string) },
+    jwtConfig.secret,
+    { expiresIn: RESET_EXPIRA } as jwt.SignOptions,
+  );
+  return { token, nome: String(row.nome).split(' ')[0] ?? '', email: row.email as string };
+}
+
+export async function redefinirSenha(token: string, novaSenha: string) {
+  if (!token) throw new Error('Link invalido ou expirado');
+  if (!novaSenha || !isStrongPassword(novaSenha)) throw new Error('Senha deve ter no minimo 8 caracteres');
+
+  let decoded: { id: number; tipo: string; v: string };
+  try {
+    decoded = jwt.verify(token, jwtConfig.secret) as typeof decoded;
+  } catch {
+    throw new Error('Link invalido ou expirado');
+  }
+  if (decoded.tipo !== 'reset-paciente') throw new Error('Link invalido ou expirado');
+
+  const r = await pool.query('SELECT senha FROM paciente WHERE id_paciente = $1', [decoded.id]);
+  const row = r.rows[0];
+  if (!row || marcaSenha(row.senha as string) !== decoded.v) throw new Error('Link invalido ou expirado');
+
+  const hash = await bcrypt.hash(novaSenha, 12);
+  await pool.query('UPDATE paciente SET senha = $1 WHERE id_paciente = $2', [hash, decoded.id]);
+}

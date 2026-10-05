@@ -6,8 +6,7 @@ form.addEventListener('submit', (e) => {
     const email = document.getElementById('email').value;
     const dadosRecuperacao = { email: email };
 
-    // Rota que seu colega vai criar no Spring Boot (Java)
-    const API_URL = '/api/pacientes/recuperar-senha';
+        const API_URL = '/api/paciente/auth/recuperar-senha';
 
     fetch(API_URL, {
         method: 'POST',
@@ -19,15 +18,13 @@ form.addEventListener('submit', (e) => {
     })
     .then(response => {
         if (response.ok) {
-            alert('Link de recuperação enviado com sucesso! Verifique sua caixa de entrada.');
+            alert('Se o e-mail estiver cadastrado, você vai receber um link para redefinir a senha. Verifique também a caixa de spam.');
             window.location.href = '../login/index.html';
         } else {
-            alert('E-mail não cadastrado no sistema.');
+            response.json().then((d) => alert(d.message || 'Não foi possível enviar o link. Tente novamente.')).catch(() => alert('Não foi possível enviar o link. Tente novamente.'));
         }
     })
     .catch(() => {
-        // Modo simulação caso o Java esteja desligado nos testes locais
-        alert('Simulação: Link de recuperação enviado com sucesso para ' + email);
-        window.location.href = '../login/index.html';
+        alert('Não foi possível conectar ao servidor. Tente novamente em instantes.');
     });
 });

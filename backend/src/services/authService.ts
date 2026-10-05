@@ -101,7 +101,8 @@ export async function forgotPassword(email: string) {
 export async function resetPassword(token: string, novaSenha: string) {
   if (!isStrongPassword(novaSenha)) throw new Error('Senha deve ter no minimo 8 caracteres');
 
-  const decoded = jwt.verify(token, jwtConfig.secret) as { id: number };
+  const decoded = jwt.verify(token, jwtConfig.secret) as { id: number; tipo?: string };
+  if (decoded.tipo !== undefined) throw new Error('Token invalido');
   const hash = await bcrypt.hash(novaSenha, 12);
 
   await pool.query(

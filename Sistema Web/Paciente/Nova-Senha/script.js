@@ -38,7 +38,7 @@ form.addEventListener('submit', (e) => {
         novaSenha: senha
     };
 
-    const API_URL = '/api/pacientes/redefinir-senha';
+    const API_URL = '/api/paciente/auth/redefinir-senha';
 
     fetch(API_URL, {
         method: 'POST',
@@ -54,7 +54,6 @@ form.addEventListener('submit', (e) => {
         }
     })
     .catch(() => {
-        alert('Simulação: Senha atualizada com sucesso!');
-        window.location.href = '../login/index.html';
+        alert('Não foi possível conectar ao servidor. Tente novamente em instantes.');
     });
 });
