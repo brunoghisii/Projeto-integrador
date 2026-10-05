@@ -17,6 +17,7 @@ import {
   obterResumoPaciente,
 } from '../copiloto/historico/historicoService.js';
 import { gerarPlano, obterPlano } from '../copiloto/historico/planoService.js';
+import { AgendamentoNaoEncontrado, analisarLaudosAgendamento } from '../copiloto/historico/laudoService.js';
 
 const router = Router();
 
@@ -117,6 +118,18 @@ router.post('/pacientes/:id/plano', async (req, res, next) => {
   try {
     res.json(successResponse(await gerarPlano(req.profissional!.id, id, anotacoes ?? undefined), 'Orientacao gerada'));
   } catch (err) { tratarErroConversa(err, res, next); }
+});
+
+// Resumo do(s) laudo(s) anexado(s) a um pedido de agendamento + o que validar com o paciente.
+router.get('/agendamentos/:id/laudo', async (req, res, next) => {
+  const id = idParam(req);
+  if (!id) { res.status(400).json(errorResponse('Id invalido', 'ID_INVALIDO')); return; }
+  try {
+    res.json(successResponse(await analisarLaudosAgendamento(req.profissional!.id, id)));
+  } catch (err) {
+    if (err instanceof AgendamentoNaoEncontrado) { res.status(404).json(errorResponse(err.message, 'AGENDAMENTO_NAO_ENCONTRADO')); return; }
+    next(err);
+  }
 });
 
 // Etapa 2 da resposta: IA generativa para uma mensagem já analisada.

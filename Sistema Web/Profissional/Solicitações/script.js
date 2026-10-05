@@ -98,9 +98,95 @@ async function carregarDocumentosModal(agendamentoId, pacienteId) {
       item.querySelector('button').addEventListener('click', () => downloadDocumento(d));
       docEl.appendChild(item);
     });
+    carregarAnaliseLaudo(agendamentoId);
   } catch {
     docEl.innerHTML = '<small style="color:#ef4444;">Erro ao carregar documentos.</small>';
   }
+}
+
+// ─── Análise do laudo pela IA (resumo + o que validar com o paciente) ───
+function elTexto(tag, cls, texto) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (texto !== undefined) n.textContent = texto;
+  return n;
+}
+
+// Markdown mínimo e seguro (sem innerHTML): títulos, listas e **negrito**.
+function markdownLaudo(texto) {
+  const frag = document.createDocumentFragment();
+  const inline = (alvo, t) => t.split(/(\*\*[^*]+\*\*)/g).forEach((p) => {
+    if (/^\*\*[^*]+\*\*$/.test(p)) alvo.append(elTexto('b', null, p.slice(2, -2)));
+    else if (p) alvo.append(p);
+  });
+  let lista = null;
+  for (const bruta of texto.split(/\r?\n/)) {
+    const linha = bruta.trim();
+    if (!linha) { lista = null; continue; }
+    const titulo = linha.match(/^#{1,6}\s+(.*)$/);
+    const item = linha.match(/^(?:[-*•]|\d+[.)])\s+(.*)$/);
+    if (titulo) {
+      lista = null;
+      const h = elTexto('h4', 'laudo-ia-titulo');
+      inline(h, titulo[1].replace(/\*\*/g, ''));
+      if (/aten[çc][ãa]o/i.test(titulo[1])) h.classList.add('atencao');
+      frag.append(h);
+    } else if (item) {
+      if (!lista) { lista = elTexto('ul', 'laudo-ia-lista'); frag.append(lista); }
+      const li = elTexto('li');
+      inline(li, item[1]);
+      lista.append(li);
+    } else {
+      lista = null;
+      const p = elTexto('p');
+      inline(p, linha);
+      frag.append(p);
+    }
+  }
+  return frag;
+}
+
+async function carregarAnaliseLaudo(agendamentoId) {
+  const box = document.getElementById('detalhe-laudo-ia');
+  if (!box) return;
+  box.hidden = false;
+  box.replaceChildren();
+  const topo = elTexto('div', 'laudo-ia-topo');
+  topo.append(elTexto('span', 'material-symbols-outlined', 'neurology'), elTexto('strong', null, 'Análise do laudo'), elTexto('span', 'laudo-ia-selo', 'IA'));
+  const corpo = elTexto('div', 'laudo-ia-corpo');
+  const carregando = elTexto('div', 'laudo-ia-carregando');
+  carregando.append(elTexto('span'), elTexto('span'), elTexto('span'), elTexto('small', null, 'Lendo o laudo e preparando o resumo…'));
+  corpo.append(carregando);
+  box.append(topo, corpo);
+
+  let r;
+  try {
+    r = await apiRequest('GET', `/copiloto/agendamentos/${agendamentoId}/laudo`);
+  } catch (err) {
+    r = { erro: err.message || 'Falha de conexão.' };
+  }
+  // A profissional pode ter aberto outra solicitação enquanto a IA respondia
+  if (!solicitacaoSelecionada || solicitacaoSelecionada.id_solicitacao !== agendamentoId) return;
+  if (!r) { box.hidden = true; return; }
+  if (r.iaHabilitada === false) { box.hidden = true; return; }
+
+  corpo.replaceChildren();
+  (r.alertas || []).forEach((a) => {
+    const al = elTexto('div', `laudo-ia-alerta sev-${String(a.severidade).toLowerCase()}`);
+    al.append(elTexto('strong', null, `⚠️ ${a.descricao}`), elTexto('p', null, a.conduta));
+    corpo.append(al);
+  });
+  if (r.analise) corpo.append(markdownLaudo(r.analise));
+  if (r.erro) {
+    const erro = elTexto('div', 'laudo-ia-erro');
+    erro.append(elTexto('p', null, `Não consegui analisar o laudo: ${r.erro}`));
+    const tentar = elTexto('button', 'laudo-ia-tentar', 'Tentar novamente');
+    tentar.type = 'button';
+    tentar.addEventListener('click', () => carregarAnaliseLaudo(agendamentoId));
+    erro.append(tentar);
+    corpo.append(erro);
+  }
+  box.append(elTexto('p', 'laudo-ia-aviso', 'Gerado por IA (Google Gemini) a partir do laudo. Confira o documento original: não substitui a sua avaliação.'));
 }
 
 function abrirModal(solicitacao) {
@@ -120,6 +206,8 @@ function abrirModal(solicitacao) {
   if (dataEl) dataEl.textContent = formatarDataBR(solicitacao.data_consulta);
   if (horaEl) horaEl.textContent = formatarHorario(solicitacao.horario);
   if (docEl) docEl.innerHTML = '<small style="color:#9CA3AF;">Carregando...</small>';
+  const laudoBox = document.getElementById('detalhe-laudo-ia');
+  if (laudoBox) { laudoBox.hidden = true; laudoBox.replaceChildren(); }
   if (obsEl) obsEl.textContent = solicitacao.descricao || 'Sem observações.';
 
   modal.classList.add('active');

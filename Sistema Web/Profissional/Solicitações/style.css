@@ -604,3 +604,35 @@ body {
 .btn-analisar:active {
     transform: translateY(0); 
 }
+/* Modal com análise do laudo pode ficar alto: rola por dentro */
+.modal-card { max-height: 92vh; overflow-y: auto; }
+
+/* ─── Análise do laudo (IA) ─────────────────────────────── */
+.laudo-ia {
+    margin-top: 10px; border: 1px solid #D1FAE5; border-radius: 14px; background: #fff;
+    padding: 12px 14px; font-size: 0.82rem; color: #1F2937; line-height: 1.5;
+}
+.laudo-ia[hidden] { display: none; }
+.laudo-ia-topo { display: flex; align-items: center; gap: 6px; color: #065F46; margin-bottom: 8px; }
+.laudo-ia-topo .material-symbols-outlined { font-size: 19px; color: #10B981; }
+.laudo-ia-topo strong { font-size: 0.86rem; }
+.laudo-ia-selo { margin-left: auto; background: #ECFDF5; color: #047857; border-radius: 999px; padding: 1px 8px; font-size: 0.68rem; font-weight: 700; }
+.laudo-ia-corpo p + p { margin-top: 6px; }
+.laudo-ia-titulo { font-size: 0.8rem; color: #046C4E; margin: 10px 0 4px; text-transform: none; }
+.laudo-ia-titulo:first-child { margin-top: 0; }
+.laudo-ia-titulo.atencao { color: #B45309; }
+.laudo-ia-lista { margin: 2px 0 0 18px; padding: 0; }
+.laudo-ia-lista li { margin-bottom: 3px; }
+.laudo-ia-lista li::marker { color: #10B981; }
+.laudo-ia-alerta { border-left: 4px solid #D97706; background: #FFFBEB; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.laudo-ia-alerta.sev-critica { border-left-color: #DC2626; background: #FEF2F2; }
+.laudo-ia-alerta p { margin-top: 2px; font-size: 0.78rem; }
+.laudo-ia-carregando { display: flex; align-items: center; gap: 5px; color: #6B7280; }
+.laudo-ia-carregando span { width: 7px; height: 7px; border-radius: 50%; background: #10B981; animation: laudo-pulo 1s infinite ease-in-out; }
+.laudo-ia-carregando span:nth-child(2) { animation-delay: .15s; }
+.laudo-ia-carregando span:nth-child(3) { animation-delay: .3s; }
+.laudo-ia-carregando small { margin-left: 6px; }
+@keyframes laudo-pulo { 0%, 80%, 100% { opacity: .3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+.laudo-ia-erro { color: #991B1B; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.laudo-ia-tentar { border: 1px solid #FCA5A5; background: #fff; color: #B91C1C; border-radius: 999px; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; cursor: pointer; font-family: inherit; }
+.laudo-ia-aviso { margin-top: 10px; font-size: 0.68rem; color: #9CA3AF; }
