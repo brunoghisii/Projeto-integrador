@@ -1,5 +1,5 @@
 import type { ResultadoAnalise } from '../raciocinio/raciocinioEngine.js';
-import { anonimizar, configIA, ErroIA, gerarResposta } from './geminiClient.js';
+import { anonimizar, configIA, ErroIA, gerarResposta, type Conteudo } from './geminiClient.js';
 
 export interface ResultadoIA {
   resposta?: string;
@@ -7,22 +7,31 @@ export interface ResultadoIA {
   erro?: string;
 }
 
-const INSTRUCAO_SISTEMA = `Você é o Auxiliar de Casos, um assistente de apoio ao raciocínio de fisioterapeutas.
+/** Uma mensagem da fisioterapeuta e, se já houver, a resposta que a IA deu a ela. */
+export interface TurnoConversa {
+  texto: string;
+  resposta?: string;
+}
 
-Seu papel:
-- Ajudar a estudante/fisioterapeuta a raciocinar sobre o caso: possíveis causas, o que perguntar, como avaliar e como seguir.
-- Responder perguntas livres sobre o caso (ex.: "por que não usar TENS?").
+const INSTRUCAO_SISTEMA = `Você é o Auxiliar de Casos: um colega fisioterapeuta experiente que conversa com a fisioterapeuta responsável sobre os casos dela, num chat.
 
-Regras obrigatórias:
+Tom e estilo:
+- Acolhedor e colegial, como numa conversa entre colegas de clínica. Se souber o nome dela, use o primeiro nome de vez em quando (sem exagero, não em toda resposta).
+- Linguagem clara, frases curtas, sem soar robótico e sem jargão desnecessário.
+- Seja objetivo: em geral até ~180 palavras. Vá direto ao ponto e acrescente raciocínio; não repita a análise inteira.
+- Formate em Markdown simples: **negrito** para o essencial, listas curtas com "-", e títulos "### " só quando a resposta tiver mais de uma parte.
+- É uma conversa contínua: use o que já foi dito nas mensagens anteriores. Perguntas de acompanhamento (ex.: "e se ela tiver hérnia?") se referem ao mesmo caso; não peça para repetir o caso.
+- Quando fizer sentido, termine com UMA pergunta curta de acompanhamento (ex.: "Quer que eu sugira uma progressão para a próxima sessão?").
+
+Regras obrigatórias (rigor técnico e segurança):
 1. A seção ANÁLISE DO SISTEMA foi gerada por regras de segurança e pelos datasets validados da clínica. Ela TEM PRIORIDADE sobre você.
    - Nunca sugira um procedimento marcado como CONTRAINDICADO e nunca minimize uma red flag.
-   - Se houver red flag CRÍTICA, sua resposta deve começar reforçando o encaminhamento.
+   - Se houver red flag CRÍTICA, comece a resposta reforçando o encaminhamento, com clareza e sem alarmismo.
 2. Só cite procedimentos do catálogo fornecido, pelo nome e código (ex.: P008). Se algo útil não estiver no catálogo, diga que "não consta no dataset".
 3. Use a CBDF (sistemas D01–D10, qualificadores 0–4, 8, 9) ao falar de diagnóstico fisioterapêutico.
-4. Não dê diagnóstico médico, não prescreva medicamentos, não invente dados do paciente. Se faltar informação, pergunte.
-5. Se houver FICHA DO PACIENTE, use-a (idade, observações, consultas e sessões anteriores) para personalizar a orientação e compare com a evolução registrada.
-6. Seja objetivo: no máximo ~180 palavras, em português do Brasil, com tópicos curtos. Não repita a lista inteira da análise; acrescente raciocínio.
-7. Termine lembrando, em uma linha curta, que a decisão é da fisioterapeuta.`;
+4. Não dê diagnóstico médico, não prescreva medicamentos e não invente dados do paciente. Se faltar informação, pergunte.
+5. Se houver FICHA DO PACIENTE, use-a (idade, observações, consultas e sessões anteriores) para personalizar a orientação.
+6. Você é apoio à decisão clínica: a decisão final é sempre da fisioterapeuta. Deixe isso claro de forma natural quando a resposta envolver conduta (uma frase curta basta, não repita em toda mensagem).`;
 
 function resumoAnalise(a: ResultadoAnalise): string {
   const linhas: string[] = [];
@@ -51,33 +60,57 @@ function resumoAnalise(a: ResultadoAnalise): string {
 }
 
 /**
+ * Monta os turnos anteriores como conversa real (user/model), para o Gemini entender
+ * perguntas de acompanhamento. Mensagens seguidas sem resposta viram um único turno.
+ */
+function turnosAnteriores(anteriores: TurnoConversa[]): Conteudo[] {
+  const conteudos: Conteudo[] = [];
+  for (const t of anteriores) {
+    const texto = anonimizar(t.texto);
+    const ultimo = conteudos[conteudos.length - 1];
+    if (ultimo && ultimo.role === 'user') ultimo.parts.push({ text: texto });
+    else conteudos.push({ role: 'user', parts: [{ text: texto }] });
+    if (t.resposta) conteudos.push({ role: 'model', parts: [{ text: t.resposta }] });
+  }
+  return conteudos;
+}
+
+/**
  * Gera a resposta da IA para a conversa. Nunca lança: em falha, retorna { erro },
  * e o copiloto por regras continua funcionando normalmente.
+ * `mensagens` aceita só os textos (sem respostas) ou os turnos com as respostas anteriores.
  */
 export async function responderComIA(
-  mensagens: string[],
+  mensagens: Array<string | TurnoConversa>,
   analise: ResultadoAnalise,
   fichaPaciente?: string,
   pedidoPersonalizado?: string,
+  nomeProfissional?: string,
 ): Promise<ResultadoIA | undefined> {
   const cfg = configIA();
   if (!cfg.habilitada) return undefined;
 
-  const historico = mensagens.slice(0, -1).map(anonimizar);
-  const atual = mensagens.length ? anonimizar(mensagens[mensagens.length - 1]!) : '';
+  const turnos = mensagens.map((m) => (typeof m === 'string' ? { texto: m } : m));
+  const atual = turnos.length ? anonimizar(turnos[turnos.length - 1]!.texto) : '';
   const pedido = pedidoPersonalizado
     ?? (atual
       ? `NOVA MENSAGEM DA FISIOTERAPEUTA:\n${atual}`
       : 'NOVA SOLICITAÇÃO: o paciente acabou de ser encaminhado para atendimento. Com base na ficha e na análise, ' +
         'dê a orientação inicial: o que priorizar na avaliação de hoje, cuidados e como seguir.');
   const prompt =
+    (nomeProfissional ? `Você está conversando com a fisioterapeuta ${nomeProfissional}.\n\n` : '') +
     (fichaPaciente ? `FICHA DO PACIENTE (sem identificação):\n${anonimizar(fichaPaciente)}\n\n` : '') +
-    (historico.length ? `RELATO ANTERIOR NESTA CONSULTA:\n${historico.map((m) => `- ${m}`).join('\n')}\n\n` : '') +
     `${pedido}\n\n` +
-    `ANÁLISE DO SISTEMA (regras + datasets, prioridade máxima):\n${resumoAnalise(analise)}`;
+    `ANÁLISE DO SISTEMA (regras + datasets, prioridade máxima — considera a conversa inteira):\n${resumoAnalise(analise)}`;
+
+  const conteudos = turnosAnteriores(turnos.slice(0, -1));
+  const ultimo = conteudos[conteudos.length - 1];
+  // A API exige alternância: se o último turno anterior ficou sem resposta, junta ao pedido atual.
+  if (ultimo && ultimo.role === 'user') ultimo.parts.push({ text: prompt });
+  else conteudos.push({ role: 'user', parts: [{ text: prompt }] });
 
   try {
-    const r = await gerarResposta(INSTRUCAO_SISTEMA, [{ role: 'user', parts: [{ text: prompt }] }]);
+    const r = await gerarResposta(INSTRUCAO_SISTEMA, conteudos);
     return { resposta: r.texto, modelo: r.modelo };
   } catch (err) {
     const msg = err instanceof ErroIA ? err.message : 'Falha inesperada ao consultar a IA.';

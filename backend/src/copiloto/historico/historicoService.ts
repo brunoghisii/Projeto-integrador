@@ -210,15 +210,23 @@ export async function gerarRespostaIA(idProfissional: number, idConversa: number
   const analise = msg.rows[0].analise as ResultadoAnalise;
   if (analise.ia?.resposta) return analise.ia; // já gerada (ex.: reabertura)
 
-  const [relatos, ficha] = await Promise.all([
+  // Turnos anteriores com as respostas que a IA já deu, para o contexto da conversa.
+  const [relatos, ficha, prof] = await Promise.all([
     pool.query(
-      "SELECT texto FROM copiloto_mensagem WHERE id_conversa = $1 AND tipo = 'relato' AND id_mensagem <= $2 ORDER BY id_mensagem",
+      `SELECT texto, analise->'ia'->>'resposta' AS resposta
+         FROM copiloto_mensagem
+        WHERE id_conversa = $1 AND tipo = 'relato' AND id_mensagem <= $2
+        ORDER BY id_mensagem`,
       [idConversa, idMensagem],
     ),
     conv.id_paciente ? carregarFichaPaciente(conv.id_paciente) : Promise.resolve(null),
+    pool.query('SELECT nome FROM profissional WHERE id_profissional = $1', [idProfissional]),
   ]);
+  const turnos = relatos.rows.map((x: { texto: string; resposta: string | null }) =>
+    ({ texto: x.texto, ...(x.resposta ? { resposta: x.resposta } : {}) }));
+  const primeiroNome = String(prof.rows[0]?.nome ?? '').trim().split(/\s+/)[0] || undefined;
 
-  const ia = await responderComIA(relatos.rows.map((x: { texto: string }) => x.texto), analise, ficha?.resumo);
+  const ia = await responderComIA(turnos, analise, ficha?.resumo, undefined, primeiroNome);
   if (!ia) return null;
   await pool.query(
     "UPDATE copiloto_mensagem SET analise = jsonb_set(analise, '{ia}', $1::jsonb) WHERE id_mensagem = $2",

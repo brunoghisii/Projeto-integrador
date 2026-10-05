@@ -1,9 +1,13 @@
 /* ============================================================
    copiloto.js — Copiloto Clínico (chat) no Painel
    Cada mensagem é salva no histórico (POST /api/copiloto/conversas/...)
-   e o servidor analisa a conversa inteira. O copiloto responde só com
-   o que for NOVO desde a última mensagem. Conversas antigas podem ser
-   reabertas pelo painel de histórico.
+   e o servidor analisa a conversa inteira. Cada pergunta vira um novo
+   par de balões (profissional → assistente); nada é sobrescrito.
+   Resposta do assistente, num único balão:
+     1. alertas de triagem (topo, destacados);
+     2. resposta da IA (Gemini), com o histórico da conversa como contexto;
+     3. detalhes técnicos recolhíveis (orientação, quadros, procedimentos).
+   Conversas antigas podem ser reabertas pelo painel de histórico.
    ============================================================ */
 
 (function () {
@@ -11,6 +15,7 @@
   if (!form) return;
 
   const input = document.getElementById('cop-input');
+  const botaoEnviar = form.querySelector('.chat-enviar');
   const mensagensEl = document.getElementById('cop-mensagens');
   const statusEl = document.getElementById('cop-status');
 
@@ -23,6 +28,13 @@
   };
   const ICONE_SEVERIDADE = { CRITICA: '🔴', ALTA: '🟡', MODERADA: '🔵' };
   const ROTULO_SEVERIDADE = { CRITICA: 'Crítica', ALTA: 'Alta', MODERADA: 'Moderada' };
+
+  const SUGESTOES = [
+    'Montar plano para dor lombar crônica',
+    'Sugerir exercícios para pós-operatório de joelho (LCA)',
+    'Como avaliar uma dor no ombro ao elevar o braço?',
+    'Quais sinais de alerta observar na cervicalgia?',
+  ];
 
   const pacienteSelect = document.getElementById('cop-paciente');
   const historicoEl = document.getElementById('cop-historico');
@@ -38,6 +50,7 @@
   let procStatus = new Map();
   let passosAnteriores = '';
   let enviando = false;
+  let iaHabilitada = false;
 
   // ─── Sinais vitais escritos no texto ("SpO2 88%", "FC 130", "75 anos"…) ───
   function extrairContexto(texto) {
@@ -60,7 +73,7 @@
     return ctx;
   }
 
-  // ─── UI ───
+  // ─── UI básica ───
   function el(tag, cls, texto) {
     const n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -68,10 +81,20 @@
     return n;
   }
 
-  function rolarParaFim() {
-    mensagensEl.scrollTop = mensagensEl.scrollHeight;
+  function icone(nome) {
+    return el('span', 'material-symbols-outlined', nome);
   }
 
+  function rolarParaFim() {
+    requestAnimationFrame(() => { mensagensEl.scrollTop = mensagensEl.scrollHeight; });
+  }
+
+  function primeiroNome() {
+    const u = typeof getUsuario === 'function' ? getUsuario() : null;
+    return String((u && u.nome) || '').trim().split(/\s+/)[0] || '';
+  }
+
+  /** Balão simples (mensagens da profissional e avisos do sistema). */
   function balao(autor, ...conteudo) {
     const b = el('div', `chat-msg ${autor}`);
     b.append(...conteudo);
@@ -80,11 +103,95 @@
     return b;
   }
 
+  function balaoUsuario(texto) {
+    return balao('user', el('p', null, texto));
+  }
+
+  /**
+   * Balão do assistente: avatar + corpo com três áreas fixas
+   * (alertas no topo, resposta, detalhes técnicos).
+   */
+  function balaoAssistente() {
+    const linha = el('div', 'chat-linha bot');
+    const avatar = el('div', 'chat-avatar');
+    avatar.append(icone('neurology'));
+    const msg = el('div', 'chat-msg bot');
+    const alertas = el('div', 'chat-area-alertas');
+    const resposta = el('div', 'chat-area-resposta');
+    const tecnico = el('div', 'chat-area-tecnico');
+    msg.append(alertas, resposta, tecnico);
+    linha.append(avatar, msg);
+    mensagensEl.append(linha);
+    rolarParaFim();
+    return { linha, msg, alertas, resposta, tecnico };
+  }
+
+  function digitando() {
+    const d = el('div', 'chat-digitando');
+    d.setAttribute('aria-label', 'Assistente digitando');
+    d.append(el('span'), el('span'), el('span'));
+    return d;
+  }
+
   function setStatus(status) {
     statusEl.dataset.status = status;
     statusEl.textContent = ROTULO_STATUS[status] || status;
   }
 
+  function travarEntrada(travar) {
+    enviando = travar;
+    input.disabled = travar;
+    atualizarBotao();
+    if (!travar) input.focus();
+  }
+
+  function atualizarBotao() {
+    botaoEnviar.disabled = enviando || !input.value.trim();
+  }
+
+  // ─── Markdown mínimo e seguro (sem innerHTML) ───
+  function inline(texto) {
+    const frag = document.createDocumentFragment();
+    texto.split(/(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|_[^_\s][^_]*_)/g).forEach((pedaco) => {
+      if (/^\*\*[^*]+\*\*$/.test(pedaco)) frag.append(el('b', null, pedaco.slice(2, -2)));
+      else if (/^(\*[^*]+\*|_[^_]+_)$/.test(pedaco)) frag.append(el('i', null, pedaco.slice(1, -1)));
+      else if (pedaco) frag.append(pedaco);
+    });
+    return frag;
+  }
+
+  function markdown(texto) {
+    const nos = [];
+    let lista = null;
+    let tipoLista = '';
+    for (const linhaBruta of texto.split(/\r?\n/)) {
+      const linha = linhaBruta.trim();
+      if (!linha) { lista = null; continue; }
+      const titulo = linha.match(/^#{1,6}\s+(.*)$/);
+      const itemUl = linha.match(/^[-*•]\s+(.*)$/);
+      const itemOl = linha.match(/^\d+[.)]\s+(.*)$/);
+      if (titulo) {
+        lista = null;
+        const h = el('h4', 'chat-md-titulo');
+        h.append(inline(titulo[1].replace(/\*\*/g, '')));
+        nos.push(h);
+      } else if (itemUl || itemOl) {
+        const tipo = itemUl ? 'ul' : 'ol';
+        if (!lista || tipoLista !== tipo) { lista = el(tipo, 'chat-md-lista'); tipoLista = tipo; nos.push(lista); }
+        const li = el('li');
+        li.append(inline((itemUl || itemOl)[1]));
+        lista.append(li);
+      } else {
+        lista = null;
+        const p = el('p');
+        p.append(inline(linha));
+        nos.push(p);
+      }
+    }
+    return nos;
+  }
+
+  // ─── Blocos da análise por regras ───
   function cartaoAlerta(a) {
     const card = el('div', `chat-alerta sev-${a.severidade.toLowerCase()}`);
     card.append(el('strong', null, `${ICONE_SEVERIDADE[a.severidade] || ''} ${a.descricao}`));
@@ -98,8 +205,7 @@
       trecho.append(`Detectado: ${a.termoDetectado}`);
     }
     card.append(trecho, el('p', 'chat-conduta', `👉 ${a.conduta}`));
-    const rodape = el('span', 'chat-tag', `Gravidade ${ROTULO_SEVERIDADE[a.severidade]}${a.sistemaCbdf ? ` · CBDF ${a.sistemaCbdf}` : ''}`);
-    card.append(rodape);
+    card.append(el('span', 'chat-tag', `Gravidade ${ROTULO_SEVERIDADE[a.severidade]}${a.sistemaCbdf ? ` · CBDF ${a.sistemaCbdf}` : ''}`));
     return card;
   }
 
@@ -166,23 +272,30 @@
     return d;
   }
 
-  function responder(analise, opcoes = {}) {
+  /**
+   * Preenche o balão com a análise por regras: alertas novos no topo e o resto
+   * (só o que mudou desde a última mensagem) num bloco técnico recolhível.
+   * Sem IA, o bloco técnico já vem aberto, pois é a resposta principal.
+   */
+  function preencherAnalise(b, analise, comIA) {
     const r = analise.triagem;
     setStatus(r.status);
-    const partes = [];
 
-    // 1. Red flags novas
+    // 1. Red flags novas — sempre no topo e visíveis
     const novos = r.alertas.filter((a) => !alertasJaMostrados.has(a.regraId));
     novos.forEach((a) => alertasJaMostrados.add(a.regraId));
     if (novos.length) {
       const critico = novos.some((a) => a.severidade === 'CRITICA');
-      partes.push(el('p', null, critico
-        ? '⚠️ Atenção! Encontrei um sinal de alerta CRÍTICO. Priorize a conduta abaixo antes de continuar:'
-        : `Encontrei ${novos.length === 1 ? 'um ponto' : `${novos.length} pontos`} que merece${novos.length === 1 ? '' : 'm'} atenção:`));
-      novos.forEach((a) => partes.push(cartaoAlerta(a)));
+      const titulo = el('p', `chat-alertas-titulo${critico ? ' critico' : ''}`);
+      titulo.append(icone(critico ? 'emergency' : 'warning'), critico
+        ? 'Sinal de alerta CRÍTICO — priorize a conduta abaixo'
+        : `${novos.length === 1 ? 'Um ponto merece' : `${novos.length} pontos merecem`} atenção`);
+      b.alertas.append(titulo);
+      novos.forEach((a) => b.alertas.append(cartaoAlerta(a)));
     }
 
-    // 1a. Orientação imediata (dataset + regras) — logo após os alertas, só quando o plano mudou
+    // 2. Detalhes técnicos (só o que é novo nesta mensagem)
+    const partes = [];
     const assinaturaPassos = analise.proximosPassos.join('\n');
     if (assinaturaPassos !== passosAnteriores && analise.proximosPassos.length) {
       passosAnteriores = assinaturaPassos;
@@ -192,25 +305,23 @@
       partes.push(ol);
     }
 
-    // 1b. Condições clínicas reconhecidas pela primeira vez nesta conversa
     const condNovas = (analise.condicoesClinicas || []).filter((c) => !condicoesMostradas.has(c.id));
     condNovas.forEach((c) => condicoesMostradas.add(c.id));
     if (condNovas.length) {
-      partes.push(secao(condNovas.length === 1 ? 'Condição clínica reconhecida:' : 'Condições clínicas reconhecidas:'));
+      partes.push(secao(condNovas.length === 1 ? '📚 Condição clínica reconhecida' : '📚 Condições clínicas reconhecidas'));
       condNovas.forEach((c) => partes.push(blocoCondicao(c)));
     }
 
-    // 2. Quadros novos ou cujas causas prováveis mudaram
     const quadrosMudaram = analise.quadros.filter((q) => {
       const assinatura = q.possiveisCausas.filter((c) => c.sustentada).map((c) => c.causa).join('|');
       if (quadrosMostrados.get(q.id) === assinatura) return false;
       quadrosMostrados.set(q.id, assinatura);
       return true;
     });
+    if (quadrosMudaram.length) partes.push(secao('🩺 Raciocínio e CBDF'));
     quadrosMudaram.forEach((q) => partes.push(blocoQuadro(q)));
 
-    // 3. Procedimentos (primeira vez: todos; depois: só os que mudaram de status)
-    // Só lista depois que há um quadro identificado (antes disso só existe a avaliação P001).
+    // Procedimentos: só depois que há quadro/condição (antes disso só existe a avaliação P001).
     if (analise.quadros.length || (analise.condicoesClinicas || []).length) {
       const primeiraVez = procStatus.size === 0;
       const lista = primeiraVez
@@ -218,17 +329,9 @@
         : analise.procedimentos.filter((p) => procStatus.get(p.id) !== p.status);
       analise.procedimentos.forEach((p) => procStatus.set(p.id, p.status));
       if (lista.length) {
-        partes.push(secao(primeiraVez ? '📋 Procedimentos do dataset para este caso' : '📋 Mudou nos procedimentos'));
+        partes.push(secao(primeiraVez ? '📋 Procedimentos do catálogo' : '📋 Mudou nos procedimentos'));
         lista.forEach((p) => partes.push(blocoProcedimento(p)));
       }
-    }
-
-    const iaVaiResponder = Boolean((analise.ia && analise.ia.resposta) || opcoes.iaPendente);
-
-    // 5. Nada de novo: sugere a próxima pergunta pendente (se a IA não vai responder)
-    if (!partes.length && !iaVaiResponder) {
-      const pendente = analise.quadros.flatMap((q) => q.perguntasPendentes)[0];
-      partes.push(el('p', null, pendente ? `Anotado. Próxima pergunta sugerida: ${pendente}` : 'Anotado ✅ Nada novo a sinalizar.'));
     }
 
     const negadosNovos = [...new Set(r.termosNegados.map((t) => t.termo.toLowerCase()))]
@@ -236,81 +339,81 @@
     negadosNovos.forEach((t) => negadosJaMostrados.add(t));
     if (negadosNovos.length) partes.push(el('p', 'chat-negados', `Considerei como negado: ${negadosNovos.join(', ')}.`));
 
-    if (partes.length) balao('bot', ...partes);
+    b.tecnico.replaceChildren();
+    if (partes.length) {
+      const d = el('details', 'chat-tecnico');
+      if (!comIA) d.open = true;
+      const s = el('summary');
+      s.append(icone('clinical_notes'), comIA ? 'Detalhes técnicos da análise' : 'Análise do caso');
+      d.append(s, ...partes);
+      b.tecnico.append(d);
+    }
 
-    // 6. Resposta da IA já salva (ao reabrir um atendimento)
-    if (analise.ia) mostrarIA(analise.ia);
+    // Sem IA e sem nada novo: sugere a próxima pergunta pendente
+    if (!comIA && !partes.length && !novos.length) {
+      const pendente = analise.quadros.flatMap((q) => q.perguntasPendentes)[0];
+      b.resposta.replaceChildren(el('p', null, pendente ? `Anotado. Próxima pergunta sugerida: ${pendente}` : 'Anotado ✅ Nada novo a sinalizar.'));
+    }
   }
 
-  function mostrarIA(ia, substituir) {
-    let conteudo;
+  /** Mostra a resposta da IA (ou a falha com "Tentar novamente") na área de resposta do balão. */
+  function mostrarIA(b, ia, idConversa, idMensagem) {
     if (ia && ia.resposta) {
-      conteudo = [el('span', 'chat-ia-selo', `🤖 Auxiliar de Casos (${ia.modelo || 'IA'})`), ...textoFormatado(ia.resposta)];
-    } else if (ia && ia.erro) {
-      conteudo = [el('p', null, `🤖 IA indisponível: ${ia.erro} A orientação acima continua válida.`)];
-    } else {
-      if (substituir) substituir.remove();
+      b.msg.classList.remove('falhou');
+      b.resposta.replaceChildren(...markdown(ia.resposta));
       return;
     }
-    const cls = ia.resposta ? 'chat-msg bot ia' : 'chat-msg bot ia-erro';
-    if (substituir) {
-      substituir.className = cls;
-      substituir.replaceChildren(...conteudo);
-      rolarParaFim();
-    } else {
-      balao(cls.replace('chat-msg ', ''), ...conteudo);
-    }
-  }
-
-  // Etapa 2: pede a resposta da IA e mostra um "pensando…" enquanto isso.
-  async function pedirIA(idConversa, idMensagem) {
-    const aguardando = balao('bot ia aguardando', el('span', 'chat-ia-selo', '🤖 Auxiliar de Casos'),
-      el('p', 'chat-ia-pensando', 'Analisando o caso…'));
-    try {
-      const ia = await gerarIACopiloto(idConversa, idMensagem);
-      if (idConversa !== conversaId) { aguardando.remove(); return; } // usuário trocou de atendimento
-      mostrarIA(ia, aguardando);
-    } catch (err) {
-      mostrarIA({ erro: err.message || 'falha ao consultar a IA.' }, aguardando);
-    }
-  }
-
-  // Markdown mínimo e seguro (sem innerHTML): parágrafos, listas "-"/"*"/"1." e **negrito**.
-  function inline(texto) {
-    const frag = document.createDocumentFragment();
-    texto.split(/(\*\*[^*]+\*\*)/g).forEach((pedaco) => {
-      if (/^\*\*[^*]+\*\*$/.test(pedaco)) frag.append(el('b', null, pedaco.slice(2, -2)));
-      else if (pedaco) frag.append(pedaco);
+    const nuncaGerada = !ia; // conversa antiga, de antes da IA estar ligada
+    if (!nuncaGerada) b.msg.classList.add('falhou');
+    const erro = el('div', nuncaGerada ? 'chat-erro pendente' : 'chat-erro');
+    erro.append(el('p', null, nuncaGerada
+      ? 'Esta mensagem ainda não tem resposta da IA.'
+      : `Não consegui gerar a resposta agora${ia.erro ? ` (${ia.erro.replace(/\.$/, '')})` : ''}.`));
+    const tentar = el('button', 'chat-tentar');
+    tentar.type = 'button';
+    tentar.append(icone('refresh'), nuncaGerada ? 'Gerar resposta' : 'Tentar novamente');
+    tentar.addEventListener('click', async () => {
+      if (enviando) return;
+      travarEntrada(true);
+      await pedirIA(b, idConversa, idMensagem);
+      travarEntrada(false);
     });
-    return frag;
+    erro.append(tentar);
+    if (b.tecnico.childElementCount) erro.append(el('p', 'chat-dica', 'A análise por regras abaixo continua válida.'));
+    b.resposta.replaceChildren(erro);
   }
 
-  function textoFormatado(texto) {
-    const nos = [];
-    let lista = null;
-    for (const linhaBruta of texto.split(/\r?\n/)) {
-      const linha = linhaBruta.trim();
-      if (!linha) { lista = null; continue; }
-      const item = linha.match(/^(?:[-*•]|\d+[.)])\s+(.*)$/);
-      if (item) {
-        if (!lista) { lista = el('ul', 'chat-ia-lista'); nos.push(lista); }
-        const li = el('li');
-        li.append(inline(item[1]));
-        lista.append(li);
-      } else {
-        lista = null;
-        const p = el('p');
-        p.append(inline(linha.replace(/^#+\s*/, '')));
-        nos.push(p);
-      }
+  async function pedirIA(b, idConversa, idMensagem) {
+    b.resposta.replaceChildren(digitando());
+    rolarParaFim();
+    let ia;
+    try {
+      ia = await gerarIACopiloto(idConversa, idMensagem);
+    } catch (err) {
+      ia = { erro: err.message || 'falha de conexão' };
     }
-    return nos;
+    if (idConversa !== conversaId) return; // a profissional trocou de atendimento
+    mostrarIA(b, ia || { erro: 'sem resposta do servidor' }, idConversa, idMensagem);
+    rolarParaFim();
   }
 
+  // ─── Boas-vindas ───
   function boasVindas() {
-    balao('bot',
-      el('p', null, 'Olá, Luana! 👋 Selecione um paciente acima para eu carregar a ficha e já trazer a orientação inicial, ou descreva um caso livremente.'),
-      el('p', 'chat-dica', 'Pode mandar aos poucos: queixa, histórico, medicamentos, sinais vitais (ex.: "SpO2 92%, FC 110"). Eu aponto sinais de alerta, possíveis causas, procedimentos compatíveis e como seguir.'));
+    const nome = primeiroNome();
+    const b = balaoAssistente();
+    b.msg.classList.add('boas-vindas');
+    b.resposta.append(
+      el('p', null, `Olá${nome ? `, ${nome}` : ''}! 👋 Sou o seu Auxiliar de Casos.`),
+      el('p', null, 'Me conte o caso como contaria a um colega: queixa, tempo, o que piora ou melhora, sinais vitais. Ou escolha um paciente acima para eu carregar a ficha.'),
+    );
+    const chips = el('div', 'chat-sugestoes');
+    for (const s of SUGESTOES) {
+      const c = el('button', 'chat-sugestao', s);
+      c.type = 'button';
+      c.addEventListener('click', () => enviar(s));
+      chips.append(c);
+    }
+    b.resposta.append(chips);
   }
 
   function cartaoPaciente(p) {
@@ -319,7 +422,7 @@
       `${p.totalSessoes} ${p.totalSessoes === 1 ? 'sessão registrada' : 'sessões registradas'}`,
       p.ultimaSessao ? `última em ${p.ultimaSessao}` : null,
     ].filter(Boolean).join(' · ');
-    balao('bot sistema', el('p', null, `👤 Atendimento de ${p.nome}`), el('p', 'chat-dica', detalhes));
+    return balao('sistema', el('p', null, `👤 Atendimento de ${p.nome}`), el('p', 'chat-dica', detalhes));
   }
 
   // ─── Paciente cadastrado ───
@@ -339,19 +442,21 @@
   async function iniciarComPaciente(idPaciente) {
     limparEstado();
     fecharHistorico();
-    const digitando = balao('bot digitando', el('span'), el('span'), el('span'));
+    travarEntrada(true);
+    const b = balaoAssistente();
+    b.resposta.append(digitando());
     try {
       const r = await iniciarAtendimentoCopiloto(idPaciente);
-      digitando.remove();
-      if (!r) return;
+      if (!r) { b.linha.remove(); return; }
       conversaId = r.conversaId;
-      cartaoPaciente(r.paciente);
-      responder(r.analise, { iaPendente: r.iaPendente });
-      if (r.iaPendente) pedirIA(r.conversaId, r.mensagemId);
-      input.focus();
+      b.linha.before(cartaoPaciente(r.paciente));
+      preencherAnalise(b, r.analise, r.iaPendente);
+      if (r.iaPendente) await pedirIA(b, r.conversaId, r.mensagemId);
+      else b.resposta.replaceChildren();
     } catch (err) {
-      digitando.remove();
-      balao('bot erro', el('p', null, `Não consegui abrir a ficha: ${err.message || 'erro desconhecido'}`));
+      b.resposta.replaceChildren(el('p', 'chat-erro', `Não consegui abrir a ficha: ${err.message || 'erro desconhecido'}`));
+    } finally {
+      travarEntrada(false);
     }
   }
 
@@ -368,6 +473,7 @@
   }
 
   function novaConsulta(focar = true) {
+    if (enviando) return;
     limparEstado();
     fecharHistorico();
     pacienteSelect.value = '';
@@ -375,32 +481,55 @@
     if (focar) input.focus();
   }
 
+  // ─── Envio ───
   async function enviar(texto) {
     texto = texto.trim();
     if (!texto || enviando) return;
-    enviando = true;
-    balao('user', el('p', null, texto));
+    // Sugestões da tela de boas-vindas somem quando a conversa começa
+    mensagensEl.querySelectorAll('.chat-sugestoes').forEach((n) => n.remove());
+
+    balaoUsuario(texto);
     input.value = '';
     ajustarAltura();
+    travarEntrada(true);
 
-    const digitando = balao('bot digitando', el('span'), el('span'), el('span'));
+    const b = balaoAssistente();
+    await processar(b, texto);
+    travarEntrada(false);
+  }
+
+  /** Etapa 1 (regras, na hora) + etapa 2 (IA). Em falha, o balão oferece "Tentar novamente". */
+  async function processar(b, texto) {
+    b.msg.classList.remove('falhou');
+    b.resposta.replaceChildren(digitando());
+    rolarParaFim();
+    let r;
     try {
-      const r = await enviarMensagemCopiloto(conversaId, texto, extrairContexto(texto));
-      digitando.remove();
-      if (r) {
-        conversaId = r.conversaId;
-        // Etapa 1: orientação do dataset na hora. Etapa 2: IA chega em seguida, sem travar o chat.
-        responder(r.analise, { iaPendente: r.iaPendente });
-        if (r.iaPendente) pedirIA(r.conversaId, r.mensagemId);
-      }
+      r = await enviarMensagemCopiloto(conversaId, texto, extrairContexto(texto));
     } catch (err) {
-      digitando.remove();
       setStatus('ERRO');
-      balao('bot erro', el('p', null, `Não consegui analisar agora: ${err.message || 'erro desconhecido'}`));
-    } finally {
-      enviando = false;
-      input.focus();
+      b.msg.classList.add('falhou');
+      const erro = el('div', 'chat-erro');
+      erro.append(el('p', null, `Não consegui enviar sua mensagem: ${err.message || 'erro desconhecido'}.`));
+      const tentar = el('button', 'chat-tentar');
+      tentar.type = 'button';
+      tentar.append(icone('refresh'), 'Tentar novamente');
+      tentar.addEventListener('click', async () => {
+        if (enviando) return;
+        travarEntrada(true);
+        await processar(b, texto);
+        travarEntrada(false);
+      });
+      erro.append(tentar);
+      b.resposta.replaceChildren(erro);
+      return;
     }
+    if (!r) { b.linha.remove(); return; }
+    conversaId = r.conversaId;
+    preencherAnalise(b, r.analise, r.iaPendente);
+    if (r.iaPendente) await pedirIA(b, r.conversaId, r.mensagemId);
+    else if (b.resposta.querySelector('.chat-digitando')) b.resposta.replaceChildren();
+    rolarParaFim();
   }
 
   // ─── Histórico ───
@@ -440,7 +569,7 @@
       const excluir = el('button', 'chat-historico-excluir');
       excluir.type = 'button';
       excluir.title = 'Excluir atendimento';
-      excluir.append(el('span', 'material-symbols-outlined', 'delete'));
+      excluir.append(icone('delete'));
       excluir.addEventListener('click', () => confirmarExclusao(item, c));
 
       item.append(abrir, excluir);
@@ -487,6 +616,7 @@
   }
 
   async function abrirConversa(id) {
+    if (enviando) return;
     try {
       const c = await obterConversaCopiloto(id);
       if (!c) return;
@@ -494,13 +624,19 @@
       fecharHistorico();
       conversaId = c.id;
       pacienteSelect.value = c.id_paciente ? String(c.id_paciente) : '';
-      balao('bot sistema', el('p', null, `📂 Atendimento de ${formatarData(c.criado_em)} reaberto. Pode continuar de onde parou.`));
+      balao('sistema', el('p', null, `📂 Atendimento de ${formatarData(c.criado_em)} reaberto. Pode continuar de onde parou.`));
       if (c.paciente) cartaoPaciente(c.paciente);
-      // Reproduz a conversa com as análises salvas, na mesma ordem.
+      // Reproduz a conversa no mesmo formato: pergunta → resposta, na ordem em que aconteceu.
       for (const m of c.mensagens) {
-        if (m.tipo !== 'ficha') balao('user', el('p', null, m.texto));
-        responder(m.analise);
+        if (m.tipo !== 'ficha') balaoUsuario(m.texto);
+        const b = balaoAssistente();
+        const ia = m.analise.ia;
+        const teveIA = Boolean(ia) || iaHabilitada;
+        preencherAnalise(b, m.analise, teveIA);
+        if (ia && ia.resposta) mostrarIA(b, ia, c.id, m.id);
+        else if (teveIA) mostrarIA(b, ia, c.id, m.id);
       }
+      rolarParaFim();
       input.focus();
     } catch (err) {
       showNotification(err.message || 'Falha ao abrir atendimento', 'error');
@@ -509,12 +645,13 @@
 
   function ajustarAltura() {
     input.style.height = 'auto';
-    input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+    atualizarBotao();
   }
 
   form.addEventListener('submit', (e) => { e.preventDefault(); enviar(input.value); });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar(input.value); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); enviar(input.value); }
   });
   input.addEventListener('input', ajustarAltura);
   document.getElementById('cop-novo').addEventListener('click', () => novaConsulta());
@@ -523,17 +660,20 @@
   document.getElementById('cop-historico-fechar').addEventListener('click', fecharHistorico);
   historicoBuscaEl.addEventListener('input', renderizarLista);
   pacienteSelect.addEventListener('change', () => {
+    if (enviando) return;
     if (pacienteSelect.value) iniciarComPaciente(Number(pacienteSelect.value));
     else novaConsulta();
   });
 
   novaConsulta(false);
+  atualizarBotao();
   carregarPacientes();
 
   // Mostra o selo do Auxiliar de Casos quando a IA generativa estiver ligada no backend.
   obterStatusCopiloto()
     .then((s) => {
       if (s && s.ia && s.ia.habilitada) {
+        iaHabilitada = true;
         document.getElementById('cop-aviso-ia').hidden = false;
         input.placeholder = 'Escreva o relato ou faça uma pergunta sobre o caso…';
       }
