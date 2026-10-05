@@ -196,6 +196,10 @@ async function showTimes() {
 
     timeGrid.appendChild(div);
   });
+
+  // Só um horário livre: já deixa selecionado
+  const livres = timeGrid.querySelectorAll('.time-slot:not(.time-slot-ocupado)');
+  if (livres.length === 1) livres[0].click();
 }
 
 function updateFileName() {
@@ -234,7 +238,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       if (!servico) { if (typeof showNotification === "function") showNotification('Selecione o tipo de atendimento.', 'error'); return; }
       if (!dataAtualSelecionada) { if (typeof showNotification === "function") showNotification('Selecione uma data disponível.', 'error'); return; }
-      if (!horarioSelecionado) { if (typeof showNotification === "function") showNotification('Selecione um horário disponível.', 'error'); return; }
+      if (!horarioSelecionado) {
+        if (typeof showNotification === "function") showNotification('Toque em um dos horários disponíveis para selecioná-lo.', 'error');
+        document.getElementById('time-grid')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
 
       const btnSubmit = document.getElementById('btn-submit');
       if (btnSubmit) { btnSubmit.textContent = 'Enviando...'; btnSubmit.disabled = true; }
