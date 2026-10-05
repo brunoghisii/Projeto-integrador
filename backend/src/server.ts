@@ -28,6 +28,8 @@ import { sincronizarDataset } from './copiloto/procedimentos/procedimentosRepo.j
 import { limparSlotsExpirados } from './services/agendamentosService.js';
 
 const app = express();
+// Atras do tunel Cloudflare: confia no X-Forwarded-For do primeiro proxy (exigido pelo express-rate-limit)
+app.set('trust proxy', 1);
 
 const corsOrigins = process.env['CORS_ORIGIN']?.split(',') ?? ['http://localhost:3000', 'http://localhost:5173'];
 app.use(cors({ origin: corsOrigins, credentials: true }));
