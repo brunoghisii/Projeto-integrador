@@ -31,8 +31,13 @@ const app = express();
 // Atras do tunel Cloudflare: confia no X-Forwarded-For do primeiro proxy (exigido pelo express-rate-limit)
 app.set('trust proxy', 1);
 
-const corsOrigins = process.env['CORS_ORIGIN']?.split(',') ?? ['http://localhost:3000', 'http://localhost:5173'];
-app.use(cors({ origin: corsOrigins, credentials: true }));
+const corsOrigins = process.env['CORS_ORIGIN']?.split(',').map((o) => o.trim()).filter(Boolean)
+  ?? ['http://localhost:3000', 'http://127.0.0.1:5500', 'http://localhost:5500'];
+app.use(cors({
+  origin: corsOrigins,
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'],
+}));
 
 // Frontend estatico servido pelo proprio backend (mesma origem que a API).
 // Resolve caminhos sem diferenciar maiusculas/acentos, pois os links do front

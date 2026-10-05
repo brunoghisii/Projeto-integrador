@@ -4,7 +4,9 @@
    Backend: http://localhost:3000/api
    ============================================================ */
 
-const API_BASE = location.protocol === 'file:' ? 'http://localhost:3000/api' : '/api';
+// Servidor no celular (ngrok). Paginas servidas pelo proprio backend usam caminho relativo.
+const API_ORIGIN = 'https://untapped-daffodil-livable.ngrok-free.dev';
+const API_BASE = (location.origin === API_ORIGIN || location.host === 'localhost:3000') ? '/api' : `${API_ORIGIN}/api`;
 
 // ─── UTILITÁRIOS DE AUTH ────────────────────────────────────
 
@@ -95,7 +97,7 @@ function showNotification(message, type = 'success') {
 
 async function apiRequest(method, endpoint, data = null) {
   const token = getToken();
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
   const config = { method, headers };

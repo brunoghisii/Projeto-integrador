@@ -42,7 +42,7 @@ form.addEventListener('submit', (e) => {
 
     fetch(API_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
         body: JSON.stringify(dadosAtualizacao)
     })
     .then(response => {

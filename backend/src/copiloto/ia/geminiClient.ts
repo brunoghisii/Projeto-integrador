@@ -5,7 +5,7 @@
 // A IA só é ligada com COPILOTO_IA_HABILITADA=true e GEMINI_API_KEY configurada.
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-const TIMEOUT_MS = 15_000;
+const TIMEOUT_MS = Number(process.env['GEMINI_TIMEOUT_MS']) || 30_000;
 
 export interface ConfigIA {
   habilitada: boolean;

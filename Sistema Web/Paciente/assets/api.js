@@ -1,4 +1,6 @@
-const API_BASE = location.protocol === 'file:' ? 'http://localhost:3000/api' : '/api';
+// Servidor no celular (ngrok). Paginas servidas pelo proprio backend usam caminho relativo.
+const API_ORIGIN = 'https://untapped-daffodil-livable.ngrok-free.dev';
+const API_BASE = (location.origin === API_ORIGIN || location.host === 'localhost:3000') ? '/api' : `${API_ORIGIN}/api`;
 
 function getPacienteToken() {
   return localStorage.getItem('paciente_token');
@@ -11,7 +13,7 @@ function getPaciente() {
 
 async function apiRequest(method, endpoint, body = null) {
   const token = getPacienteToken();
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
   const config = { method, headers };
