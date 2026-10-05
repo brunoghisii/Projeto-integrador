@@ -203,7 +203,7 @@ export async function limparSlotsExpirados() {
 export async function getDisponibilidade(profissionalId: number) {
   await limparSlotsExpirados();
   const result = await pool.query(
-    `SELECT id_disponibilidade, data_disponivel, horario, vagas
+    `SELECT id_disponibilidade, data_disponivel, horario, vagas, servico
      FROM disponibilidade_agenda
      WHERE id_profissional = $1 AND data_disponivel >= CURRENT_DATE
      ORDER BY data_disponivel, horario`,
@@ -212,11 +212,12 @@ export async function getDisponibilidade(profissionalId: number) {
   return result.rows;
 }
 
-export async function addDisponibilidade(profissionalId: number, data: { data: string; horario: string; vagas: number }) {
+export async function addDisponibilidade(profissionalId: number, data: { data: string; horario: string; vagas: number; servico?: string }) {
+  const servico = typeof data.servico === 'string' && data.servico.trim() ? data.servico.trim().slice(0, 120) : null;
   const result = await pool.query(
-    `INSERT INTO disponibilidade_agenda (id_profissional, data_disponivel, horario, vagas)
-     VALUES ($1,$2,$3,$4) RETURNING *`,
-    [profissionalId, data.data, data.horario, data.vagas]
+    `INSERT INTO disponibilidade_agenda (id_profissional, data_disponivel, horario, vagas, servico)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [profissionalId, data.data, data.horario, data.vagas, servico]
   );
   return result.rows[0];
 }

@@ -89,27 +89,23 @@ export async function verificarSenhaEObterCpf(pacienteId: number, senha: string)
   return row.cpf;
 }
 
+// Horários liberados por TODOS os profissionais. Cada slot diz de quem é, para o
+// agendamento ser criado com o profissional que liberou aquele horário.
 export async function getDisponibilidade() {
-  const profResult = await pool.query('SELECT id_profissional FROM profissional ORDER BY id_profissional LIMIT 1');
-  const prof = profResult.rows[0] as { id_profissional: number } | undefined;
-  if (!prof) return [];
-
   const result = await pool.query(
-    `SELECT da.id_disponibilidade, da.data_disponivel, da.horario, da.vagas,
-            COUNT(a.id_agendamento) FILTER (WHERE a.status NOT IN ('Cancelado')) AS agendamentos_ativos,
-            CASE
-              WHEN COUNT(a.id_agendamento) FILTER (WHERE a.status NOT IN ('Cancelado')) >= da.vagas THEN true
-              ELSE false
-            END AS ocupado
+    `SELECT da.id_disponibilidade, da.id_profissional, p.nome AS profissional_nome,
+            da.data_disponivel, da.horario, da.vagas, da.servico,
+            COUNT(a.id_agendamento) FILTER (WHERE a.status NOT IN ('Cancelado')) AS ocupacoes,
+            COUNT(a.id_agendamento) FILTER (WHERE a.status NOT IN ('Cancelado')) >= da.vagas AS ocupado
      FROM disponibilidade_agenda da
+     JOIN profissional p ON p.id_profissional = da.id_profissional
      LEFT JOIN agendamento a
        ON a.id_profissional = da.id_profissional
       AND a.data_consulta = da.data_disponivel
-      AND a.horario = da.horario
-     WHERE da.id_profissional = $1 AND da.data_disponivel >= CURRENT_DATE AND da.vagas > 0
-     GROUP BY da.id_disponibilidade, da.data_disponivel, da.horario, da.vagas
-     ORDER BY da.data_disponivel, da.horario`,
-    [prof.id_profissional]
+      AND substring(a.horario::text, 1, 5) = substring(da.horario::text, 1, 5)
+     WHERE da.data_disponivel >= CURRENT_DATE AND da.vagas > 0
+     GROUP BY da.id_disponibilidade, p.nome
+     ORDER BY da.data_disponivel, da.horario, p.nome`
   );
   return result.rows;
 }
@@ -137,14 +133,36 @@ export async function reenviarSolicitacao(agendamentoId: number, pacienteId: num
   return result.rows[0];
 }
 
-export async function createAgendamento(pacienteId: number, data: { data_consulta: string; horario: string; observacoes?: string }) {
-  const profResult = await pool.query('SELECT id_profissional FROM profissional ORDER BY id_profissional LIMIT 1');
-  const prof = profResult.rows[0] as { id_profissional: number } | undefined;
-  if (!prof) throw new Error('Nenhum profissional encontrado');
-
+export async function createAgendamento(
+  pacienteId: number,
+  data: { data_consulta: string; horario: string; observacoes?: string; id_profissional?: number },
+) {
   const horarioLimpo = data.horario.substring(0, 5);
   const dataHora = new Date(`${data.data_consulta}T${horarioLimpo}`);
   if (dataHora <= new Date()) throw new Error('Data e horario devem ser no futuro');
+
+  // Profissional do horário: o informado pela tela; senão, quem liberou esse horário
+  // (e ainda tem vaga); sem horário liberado, o primeiro profissional (comportamento antigo).
+  const idInformado = Number(data.id_profissional);
+  const profResult = Number.isInteger(idInformado) && idInformado > 0
+    ? await pool.query('SELECT id_profissional FROM profissional WHERE id_profissional = $1', [idInformado])
+    : await pool.query(
+      `SELECT da.id_profissional
+         FROM disponibilidade_agenda da
+         LEFT JOIN agendamento a
+           ON a.id_profissional = da.id_profissional AND a.data_consulta = da.data_disponivel
+          AND substring(a.horario::text, 1, 5) = $2 AND a.status != 'Cancelado'
+        WHERE da.data_disponivel = $1 AND substring(da.horario::text, 1, 5) = $2
+        GROUP BY da.id_disponibilidade
+       HAVING COUNT(a.id_agendamento) < da.vagas
+        ORDER BY da.id_profissional
+        LIMIT 1`,
+      [data.data_consulta, horarioLimpo],
+    );
+  const prof = (profResult.rows[0]
+    ?? (await pool.query('SELECT id_profissional FROM profissional ORDER BY id_profissional LIMIT 1')).rows[0]
+  ) as { id_profissional: number } | undefined;
+  if (!prof) throw new Error('Nenhum profissional encontrado');
 
   // 1. Busca o número máximo de vagas estipulado na agenda para esse horário
   const slotInfo = await pool.query(

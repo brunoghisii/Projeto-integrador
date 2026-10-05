@@ -147,7 +147,7 @@ export async function addDisponibilidade(req: Request, res: Response): Promise<v
     const profissionalId = req.profissional!.id;
     const result = await agendamentosService.addDisponibilidade(
       profissionalId,
-      req.body as { data: string; horario: string; vagas: number }
+      req.body as { data: string; horario: string; vagas: number; servico?: string }
     );
     res.status(201).json(successResponse(result, 'Horario publicado com sucesso'));
   } catch (err) {

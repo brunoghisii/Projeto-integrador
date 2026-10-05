@@ -38,6 +38,8 @@ export async function runMigrations(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_paciente_nome ON paciente(nome)`,
     // campo de motivo para solicitações pendentes
     `ALTER TABLE agendamento ADD COLUMN IF NOT EXISTS motivo_pendencia TEXT`,
+    // Tipo de atendimento de cada horário liberado (antes ficava só no navegador da profissional)
+    `ALTER TABLE disponibilidade_agenda ADD COLUMN IF NOT EXISTS servico VARCHAR(120)`,
     // colunas extras em consulta para plano de tratamento
     `ALTER TABLE consulta ADD COLUMN IF NOT EXISTS id_paciente INT REFERENCES paciente(id_paciente)`,
     `ALTER TABLE consulta ADD COLUMN IF NOT EXISTS tipo_consulta VARCHAR(50)`,

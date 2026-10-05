@@ -78,7 +78,7 @@ export async function getAgendamentos(req: Request, res: Response): Promise<void
 export async function createAgendamento(req: Request, res: Response): Promise<void> {
   try {
     const id = req.paciente!.id;
-    const data = await pacienteAreaService.createAgendamento(id, req.body as { data_consulta: string; horario: string; observacoes?: string });
+    const data = await pacienteAreaService.createAgendamento(id, req.body as { data_consulta: string; horario: string; observacoes?: string; id_profissional?: number });
     res.status(201).json(successResponse(data, 'Solicitacao enviada com sucesso'));
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Erro';

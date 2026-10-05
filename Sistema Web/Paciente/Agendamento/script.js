@@ -1,11 +1,18 @@
 let slotsDisponibilidade = [];
 let horarioSelecionado = null;
+let slotSelecionado = null;
 let dataAtualSelecionada = null;
 
-// Recupera os atendimentos definidos pela Luana no painel administrativo
+const ATENDIMENTO_PADRAO = 'Fisioterapia Geral';
+
+function tipoDoSlot(s) {
+  return s.servico || s.especialidade || s.tipo || s.tipo_atendimento || obterAtendimentoDoSlot(s.data_disponivel, s.horario) || ATENDIMENTO_PADRAO;
+}
+
+// Tipos de atendimento com horário liberado (o tipo vem do banco, salvo quando o profissional libera o horário)
 function obterAtendimentosConfigurados() {
-  const salvos = localStorage.getItem('agenda_atendimentos');
-  return salvos ? JSON.parse(salvos) : ['Fisioterapia Geral', 'Avaliação Inicial', 'Pilates Solo'];
+  const tipos = [...new Set(slotsDisponibilidade.map(tipoDoSlot))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  return tipos.length ? tipos : [ATENDIMENTO_PADRAO];
 }
 
 // Resgata o tipo de atendimento associado localmente ao slot (Data + Hora)
@@ -73,6 +80,7 @@ async function carregarDatas() {
   dateSelect.innerHTML = '<option value="" disabled selected>Selecione uma data</option>';
   if (timeSection) timeSection.style.display = 'none';
   horarioSelecionado = null;
+  slotSelecionado = null;
   dataAtualSelecionada = null;
 
   const atendimentoSelecionado = servicoElem.value;
@@ -81,10 +89,7 @@ async function carregarDatas() {
   // Recarrega as disponibilidades atualizadas do banco de dados
   await carregarDisponibilidade();
 
-  const slotsFiltradosPorAtendimento = slotsDisponibilidade.filter(s => {
-    const tipoDoSlot = s.servico || s.especialidade || s.tipo || s.tipo_atendimento || obterAtendimentoDoSlot(s.data_disponivel, s.horario) || 'Fisioterapia Geral';
-    return tipoDoSlot === atendimentoSelecionado;
-  });
+  const slotsFiltradosPorAtendimento = slotsDisponibilidade.filter(s => tipoDoSlot(s) === atendimentoSelecionado);
 
   const datasUnicas = [...new Set(slotsFiltradosPorAtendimento.map(s => String(s.data_disponivel).substring(0, 10)))].sort();
 
@@ -129,6 +134,7 @@ async function showTimes() {
   const atendimentoSelecionado = servicoElem.value;
   timeGrid.innerHTML = '';
   horarioSelecionado = null;
+  slotSelecionado = null;
   if (timeSection) timeSection.style.display = 'none';
 
   if (!dataAtualSelecionada || !atendimentoSelecionado) return;
@@ -138,9 +144,7 @@ async function showTimes() {
   const slotsDoDia = slotsDisponibilidade
     .filter(s => {
       const dataMatch = String(s.data_disponivel).substring(0, 10) === dataAtualSelecionada;
-      const tipoDoSlot = s.servico || s.especialidade || s.tipo || s.tipo_atendimento || obterAtendimentoDoSlot(s.data_disponivel, s.horario) || 'Fisioterapia Geral';
-      const atendimentoMatch = tipoDoSlot === atendimentoSelecionado;
-      return dataMatch && atendimentoMatch;
+      return dataMatch && tipoDoSlot(s) === atendimentoSelecionado;
     })
     .sort((a, b) => String(a.horario).localeCompare(String(b.horario)));
 
@@ -152,8 +156,12 @@ async function showTimes() {
 
   if (timeSection) timeSection.style.display = 'block';
 
+  // Com mais de um profissional no dia, cada horário mostra de quem é
+  const variosProfissionais = new Set(slotsDoDia.map(s => s.id_profissional)).size > 1;
+
   slotsDoDia.forEach(slot => {
     const hora = formatarHorario(slot.horario);
+    const nomeProf = variosProfissionais && slot.profissional_nome ? String(slot.profissional_nome) : '';
     const limiteVagas = parseInt(slot.vagas || '1');
     const ocupadasGlobais = parseInt(slot.ocupacoes || '0');
 
@@ -171,10 +179,18 @@ async function showTimes() {
     } else {
       div.classList.add('time-slot');
       div.textContent = hora;
+      if (nomeProf) {
+        const quem = document.createElement('small');
+        quem.textContent = nomeProf;
+        quem.style.cssText = 'display:block;font-size:0.68rem;opacity:.8;margin-top:2px;';
+        div.appendChild(quem);
+        div.title = `${hora} com ${nomeProf}`;
+      }
       div.addEventListener('click', () => {
         document.querySelectorAll('.time-slot:not(.time-slot-ocupado)').forEach(s => s.classList.remove('selected'));
         div.classList.add('selected');
         horarioSelecionado = hora;
+        slotSelecionado = slot;
       });
     }
 
@@ -228,7 +244,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       try {
         // CORREÇÃO NO ENVIO: Puxa os dados reais de ocupação global que o slot de disponibilidade já conhece!
-        const slotAlvo = slotsDisponibilidade.find(s => 
+        const slotAlvo = slotSelecionado || slotsDisponibilidade.find(s => 
           String(s.data_disponivel).substring(0, 10) === dataAtualSelecionada && 
           formatarHorario(s.horario) === horarioSelecionado
         );
@@ -241,7 +257,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const agendamento = await criarAgendamentoPaciente({
           data_consulta: dataAtualSelecionada,
           horario: horarioFinalComSegundos, 
-          observacoes: observacoesCompletas
+          observacoes: observacoesCompletas,
+          id_profissional: slotAlvo ? slotAlvo.id_profissional : undefined
         });
 
         const fileInput = document.getElementById('exam-file');
