@@ -771,3 +771,10 @@ body {
     color: white !important;
     border-color: #2563EB !important;
 }
+/* Reagendar: todos os horários do dia */
+.rechedule-grid-horarios { max-height: 220px; }
+.reagendar-msg { grid-column: 1 / -1; color: #9CA3AF; font-size: 0.82rem; text-align: center; padding: 10px; margin: 0; }
+.slot-reagendar-btn small { display: block; font-size: 0.65rem; margin-top: 2px; }
+.slot-reagendar-btn.ocupado { background: #FFFBEB; border-color: #FCD34D; color: #92400E; }
+.slot-reagendar-btn.passou { background: #F3F4F6; color: #C0C4CC; border-color: #E5E7EB; cursor: not-allowed; }
+.slot-reagendar-btn.passou:hover { background: #F3F4F6; color: #C0C4CC; border-color: #E5E7EB; }

@@ -206,87 +206,79 @@ function obterAtendimentoDoSlot(data, horario) {
   return mapa[`${dataLimpa}_${horaLimpa}`];
 }
 
-// ─── CONEXÃO DOS HORÁRIOS DISPONÍVEIS CONECTADOS COM O TIPO DE ATENDIMENTO E VAGAS ───
-async function buscarHorariosLivresReagendar(dataSelecionada, servicoSelecionado) {
+// ─── HORÁRIOS PARA REAGENDAR ───
+// A profissional pode reagendar para qualquer dia e horário: a agenda liberada
+// (Gerenciamento de Agenda) só restringe os pedidos feitos pelos pacientes.
+const HORARIOS_REAGENDAR = [
+  '07:00','07:30','08:00','08:30','09:00','09:30',
+  '10:00','10:30','11:00','11:30','12:00','12:30',
+  '13:00','13:30','14:00','14:30','15:00','15:30',
+  '16:00','16:30','17:00','17:30','18:00','18:30'
+];
+
+async function buscarHorariosLivresReagendar(dataSelecionada) {
   const grid = document.getElementById('reagendar-horarios-grid');
   const btnConcluir = document.getElementById('btn-concluir-reagendamento');
   if (!grid) return;
-  
-  if (!dataSelecionada || !servicoSelecionado) {
-    grid.innerHTML = '<p style="color:#9CA3AF; font-size:0.8rem; padding: 10px; text-align:center; width:100%;">Escolha um serviço e uma data para ver os horários livres.</p>';
-    return;
-  }
-  
-  grid.innerHTML = '<p style="color:#9CA3AF; font-size:0.85rem; padding:10px;">Buscando horários...</p>';
+
   horarioReagendarEscolhido = null;
   if (btnConcluir) btnConcluir.disabled = true;
 
-  try {
-    // Busca direto da rota pública de disponibilidade geral do painel
-    const slots = await apiRequest('GET', '/agendamentos/disponibilidade') || [];
-    
-    // Filtra aplicando o match exato de data e tipo de serviço configurado pela Luana
-    const horariosDoDia = slots.filter(s => {
-      const dataMatch = String(s.data_disponivel).substring(0,10) === dataSelecionada;
-      const tipoDoSlot = s.servico || s.especialidade || s.tipo || s.tipo_atendimento || obterAtendimentoDoSlot(s.data_disponivel, s.horario) || 'Fisioterapia Geral';
-      return dataMatch && tipoDoSlot === servicoSelecionado;
-    });
-
-    grid.innerHTML = "";
-    
-    if (horariosDoDia.length === 0) {
-      grid.innerHTML = `<p style="color:#DC2626; font-size:0.85rem; padding:10px; text-align:center; width: 100%;">
-                          Nenhum horário de "${servicoSelecionado}" cadastrado para esta data.
-                        </p>`;
-      return;
-    }
-
-    // Busca todos os agendamentos ativos cadastrados para conferir o limite de multi-vagas por linha do banco
-    let todosAgendamentos = [];
-    try {
-      todosAgendamentos = await apiRequest('GET', '/agendamentos') || [];
-    } catch (e) {
-      todosAgendamentos = [];
-    }
-
-    horariosDoDia.sort((a,b) => String(a.horario).localeCompare(String(b.horario))).forEach(slot => {
-      const hora = String(slot.horario).substring(0,5);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'slot-reagendar-btn';
-      
-      const limiteVagas = parseInt(slot.vagas || '1');
-      
-      // Conta quantas linhas reais de pacientes ativos existem no mesmo minuto de forma global
-      const ocupadasNoMinuto = todosAgendamentos.filter(a => 
-        String(a.data_consulta).substring(0, 10) === dataSelecionada && 
-        (a.horario ? a.horario.substring(0, 5) : '') === hora &&
-        a.status !== 'Cancelado'
-      ).length;
-      
-      const flagOcupado = slot.ocupado === true || slot.ocupado === 'true' || slot.ocupado === 1 || slot.status === 'Ocupado';
-      const esgotouLimiteVagas = ocupadasNoMinuto >= limiteVagas;
-
-      if (flagOcupado || esgotouLimiteVagas) {
-        btn.textContent = `${hora} (Esgotado)`;
-        btn.disabled = true;
-        btn.style.cssText = 'background:#F3F4F6; color:#9CA3AF; border-color:#E5E7EB; cursor:not-allowed;';
-      } else {
-        const vagasRestantes = limiteVagas - ocupadasNoMinuto;
-        btn.textContent = limiteVagas > 1 ? `${hora} (${vagasRestantes} vg)` : hora;
-        
-        btn.addEventListener('click', () => {
-          document.querySelectorAll('.slot-reagendar-btn').forEach(b => b.classList.remove('selected'));
-          btn.classList.add('selected');
-          horarioReagendarEscolhido = hora;
-          if (btnConcluir) btnConcluir.disabled = false;
-        });
-      }
-      grid.appendChild(btn);
-    });
-  } catch (err) {
-    grid.innerHTML = '<p style="color:#DC2626; font-size:0.85rem; padding:10px;">Erro ao carregar os horários.</p>';
+  if (!dataSelecionada) {
+    grid.innerHTML = '<p class="reagendar-msg">Escolha uma data para ver os horários.</p>';
+    return;
   }
+
+  grid.innerHTML = '<p class="reagendar-msg">Carregando horários...</p>';
+
+  // Consultas já marcadas no dia (para avisar conflito; a consulta sendo reagendada não conta)
+  let agendamentosDoDia = [];
+  try {
+    const todos = await apiRequest('GET', '/agendamentos') || [];
+    agendamentosDoDia = todos.filter(a =>
+      String(a.data_consulta).substring(0, 10) === dataSelecionada &&
+      a.status !== 'Cancelado' &&
+      a.id_agendamento !== agendamentoSelecionado?.id_agendamento
+    );
+  } catch {
+    agendamentosDoDia = [];
+  }
+
+  const agora = new Date();
+  const hojeISO = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}-${String(agora.getDate()).padStart(2, '0')}`;
+  const minutosAgora = agora.getHours() * 60 + agora.getMinutes();
+
+  grid.innerHTML = '';
+  HORARIOS_REAGENDAR.forEach(hora => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'slot-reagendar-btn';
+    btn.textContent = hora;
+
+    const [h, m] = hora.split(':').map(Number);
+    const passou = dataSelecionada < hojeISO || (dataSelecionada === hojeISO && h * 60 + m <= minutosAgora);
+    const ocupados = agendamentosDoDia.filter(a => String(a.horario || '').substring(0, 5) === hora);
+
+    if (passou) {
+      btn.disabled = true;
+      btn.classList.add('passou');
+      btn.title = 'Horário já passou';
+    } else {
+      if (ocupados.length) {
+        btn.classList.add('ocupado');
+        const nomes = ocupados.map(a => a.nome_paciente || a.paciente_nome).filter(Boolean).join(', ');
+        btn.title = `Já existe consulta neste horário${nomes ? ` (${nomes})` : ''}. Você ainda pode escolher.`;
+        btn.append(Object.assign(document.createElement('small'), { textContent: ocupados.length === 1 ? '1 paciente' : `${ocupados.length} pacientes` }));
+      }
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.slot-reagendar-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        horarioReagendarEscolhido = hora;
+        if (btnConcluir) btnConcluir.disabled = false;
+      });
+    }
+    grid.appendChild(btn);
+  });
 }
 
 function toISO(d) { return d.toISOString().substring(0, 10); }
@@ -405,23 +397,25 @@ window.addEventListener('DOMContentLoaded', async () => {
     popularDropdownReagendamento();
     
     if (dataReagendarInput) dataReagendarInput.value = "";
-    if (servicoReagendarSelect) servicoReagendarSelect.value = "";
+    if (servicoReagendarSelect) {
+      // Já vem com o tipo atual da consulta ("[Atendimento: X]" nas observações)
+      const atual = String(agendamentoSelecionado?.observacoes || '').match(/\[Atendimento:\s*([^\]]+)\]/)?.[1]?.trim();
+      if (atual && ![...servicoReagendarSelect.options].some(o => o.value === atual)) servicoReagendarSelect.add(new Option(atual, atual));
+      servicoReagendarSelect.value = atual || (servicoReagendarSelect.options[1]?.value ?? '');
+    }
     
     const hoje = new Date().toISOString().split('T')[0];
     if (dataReagendarInput) dataReagendarInput.min = hoje;
     
-    document.getElementById('reagendar-horarios-grid').innerHTML = '<p style="color:#9CA3AF; font-size:0.8rem; padding: 10px; text-align:center; width:100%;">Escolha um serviço e uma data para ver os horários livres.</p>';
+    document.getElementById('reagendar-horarios-grid').innerHTML = '<p class="reagendar-msg">Escolha uma data para ver os horários.</p>';
     modalReagendar.classList.add('active');
   });
 
   const dispararBuscaSlots = () => {
-    if (dataReagendarInput?.value && servicoReagendarSelect?.value) {
-      buscarHorariosLivresReagendar(dataReagendarInput.value, servicoReagendarSelect.value);
-    }
+    buscarHorariosLivresReagendar(dataReagendarInput?.value);
   };
 
   dataReagendarInput?.addEventListener('change', dispararBuscaSlots);
-  servicoReagendarSelect?.addEventListener('change', dispararBuscaSlots);
 
   document.getElementById('btn-voltar-reagendar')?.addEventListener('click', () => {
     modalReagendar.classList.remove('active');
