@@ -404,7 +404,6 @@
   }
 
   // ─── Histórico ───
-  const ROTULO_STATUS_HIST = { LIBERADO: '🟢', ATENCAO: '🟡', INTERROMPIDO: '🔴' };
 
   function formatarData(iso) {
     const d = new Date(iso);
@@ -426,11 +425,16 @@
       const item = el('div', `chat-historico-item${c.id === conversaId ? ' atual' : ''}`);
       const abrir = el('button', 'chat-historico-abrir');
       abrir.type = 'button';
-      abrir.append(
-        el('span', 'chat-historico-titulo', `${ROTULO_STATUS_HIST[c.status] || '⚪'} ${c.titulo}`),
-        el('span', 'chat-historico-meta',
-          `${formatarData(c.atualizado_em)} · ${c.total_mensagens} msg${c.quadros ? ` · ${c.quadros}` : ''}`),
+      const titulo = el('span', 'chat-historico-titulo', c.titulo);
+      titulo.prepend(el('span', `chat-historico-status ${(c.status || '').toLowerCase()}`));
+      titulo.title = c.titulo;
+      const meta = el('span', 'chat-historico-meta');
+      meta.append(
+        el('span', '', formatarData(c.atualizado_em)),
+        el('span', '', `${c.total_mensagens} msg`),
       );
+      if (c.quadros) meta.append(el('span', 'chat-historico-quadro', c.quadros));
+      abrir.append(titulo, meta);
       abrir.addEventListener('click', () => abrirConversa(c.id));
 
       const excluir = el('button', 'chat-historico-excluir');
