@@ -105,7 +105,10 @@ app.use((_req, res) => {
 app.use(errorHandler);
 
 const PORT = Number(process.env['SERVER_PORT'] ?? 3000);
-app.listen(PORT, async () => {
+// 127.0.0.1: so aceita conexoes locais (o tunel Cloudflare conecta por localhost).
+// Use SERVER_HOST=0.0.0.0 para acessar pela rede Wi-Fi.
+const HOST = process.env['SERVER_HOST'] ?? '127.0.0.1';
+app.listen(PORT, HOST, async () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/api/health`);
   try {
