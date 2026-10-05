@@ -88,10 +88,10 @@ O banco sistema_clinica é composto pelas seguintes tabelas:
 
 O backend (que também serve o front-end) roda 24h em um celular Android com Termux + pm2, publicado via ngrok:
 
-* **Sistema / API:** https://untapped-daffodil-livable.ngrok-free.dev (API em , health check em )
-* **Deploy automático:** a cada push na branch , o celular atualiza e reinicia o servidor em até 1 minuto.
-* **Configuração:** o  do celular é configurado à parte, direto no aparelho, e **não vai para o git**. Use  como modelo.
-* Requisições feitas fora do próprio domínio precisam do header  (já incluso em ).
+* **Sistema / API:** https://untapped-daffodil-livable.ngrok-free.dev (API em `/api`, health check em `/api/health`)
+* **Deploy automático:** a cada push na branch `main`, o celular atualiza e reinicia o servidor em até 1 minuto.
+* **Configuração:** o `.env` do celular é configurado à parte, direto no aparelho, e **não vai para o git**. Use `backend/.env.example` como modelo.
+* Requisições feitas fora do próprio domínio precisam do header `ngrok-skip-browser-warning: true` (já incluso em `assets/api.js`).
 
 ---
 
