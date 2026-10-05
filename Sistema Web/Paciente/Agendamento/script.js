@@ -283,7 +283,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const base64 = reader.result.split(',')[1];
                     await uploadDocumentoPaciente({
                       id_agendamento: agendamento.id_agendamento,
-                      name_arquivo: file.name,
+                      nome_arquivo: file.name,
                       tipo_arquivo: file.type || 'application/octet-stream',
                       tamanho_bytes: file.size,
                       conteudo_base64: base64
